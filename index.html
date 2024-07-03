@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en" >
+<head>
+    <meta charset="UTF-8">
+    <title>Hard-Boiled ThreeJS</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+    <canvas id="canvas"></canvas>
+    <textarea id="codeEditor" class="editor" spellcheck="false" autocorrect="off" autocapitalize="off" translate="no" oninput="render()"></textarea>
+    <pre id="error"></pre>
+    <div id="indicator"></div>
+    <div id="controls">
+        <div class="controls">
+            <input id="btnToggleView" class="icon" type="checkbox" name="toggleView" onclick="toggleView()">
+            <input id="btnToggleResolution" class="icon" type="checkbox" name="toggleResolution" onchange="toggleResolution()">
+            <input id="btnReset" class="icon" type="checkbox" name="reset" onclick="reset()">
+        </div>
+    </div>
+    <script type="x-shader/x-fragment">#version 300 es
+    precision highp float;
+    out vec4 O;
+    uniform float time;
+    uniform vec2 resolution;
+    uniform vec2 touch;
+    uniform int pointerCount;
+    #define P pointerCount
+    #define mouse ((touch-.5*R)/min(R.x,R.y))
+    #define FC gl_FragCoord.xy
+    #define R resolution
+    #define T mod(time, 125.6637061436)
+    #define S smoothstep
+    #define N normalize
+    #define rot(a) mat2(cos(a-vec4(0,11,33,0)))
+    float rnd(vec2 p) {
+        return fract(sin(dot(p, vec2(12.9898, 78.233)))*345678.);
+    }
+    float noise(vec2 p) {
+        vec2 i = floor(p),
+        f = fract(p),
+        u = S(.0, 1., f);
+
+        float
+        a = rnd(i),
+        b = rnd(i+vec2(1, 0)),
+        c = rnd(i+vec2(0, 1)),
+        d = rnd(i+1.);
+
+        return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+    }
+    float fbm(vec2 p) {
+        float t = .0,
+        a = 1.;
+
+        for (int i = 0; i < 5; i++) {
+            t += a*noise(p);
+            p *= 2.;
+            a *= .5;
+        }
+
+        return t;
+    }
+    vec3 palette(float t) {
+        vec3
+        a = vec3(.5),
+        b = vec3(.5),
+        c = vec3(1),
+        d = vec3(.2,.3,.4);
+
+        return a+b*cos(6.3*(c*d+t));
+    }
+    vec3 pattern(vec2 uv) {
+        vec3 col = vec3(0);
+        vec2 p = uv;
+        float d = 1.;
+
+        for (float i = .0; i < 3.; i++) {
+            p = vec2(cos(.25*sin(uv.x)), cos(uv.y)*.25);
+            float a = fbm(2.*uv*length(p)*d),
+            b = fbm(100.*vec2(dot(p, uv)));
+            d = mix(a, b,.1);
+            uv *= .5;
+            col += palette(d)*.5;
+        }
+
+        col = mix(col, vec3(.5),.5);
+        col = mix(col, col*col*col*col, col);
+        col = S(.0, 1., col);
+        col = pow(col, vec3(.4545));
+
+        return col;
+    }
+    float smin(float a, float b, float k) {
+        float h = clamp(.5+.5*(b-a)/k,.0, 1.);
+        return mix(b, a, h)-k*h*(1.-h);
+    }
+    float egg(vec3 p, vec3 s) {
+        s.xz += (-p.y*.085);
+        s = abs(s);
+        return (length(p / s) - 1.) * min(min(s.x, s.y), s.z);
+    }
+    float box(vec3 p, vec3 s) {
+        p = abs(p)-s;
+        return length(max(p,.0))+min(.0, max(max(p.x, p.y), p.z));
+    }
+    float crss(vec3 p, float r) {
+        return min(
+            min(
+                length(p.yz)-r,
+                length(p.xz)-r
+            ),
+            length(p.xy)-r
+        );
+    }
+    vec2 map(vec3 p) {
+        vec3 q = p,
+        st = p;
+        p.xz *= rot(.39);
+        vec3 qq = p;
+        st.xz = p.xz;
+        st.xz -= clamp(round(st.xz/1.5), -1.,1.)*1.5;
+        qq -= clamp(round(qq/1.89), -1.,1.)*1.89;
+        float
+        bx = smin(box(p, vec3(1))-.05, -smin(crss(p,.73), length(qq)-1.15,.0125), -.0125),
+        sz = egg(q,vec3(.4,.55,.4)),
+        pl = box(p-vec3(0, -1.1, 0), vec3(2,.1, 2)-.02)-.025,
+        es = length(p.xz) > .5 ? egg(st-vec3(0, -.697, 0), vec3(.2,.3,.2)): 5e5;
+
+        vec2 a = vec2(pl, 1.),
+        b = vec2(bx, 2.);
+
+        a = a.x < b.x?a: b;
+        b = vec2(es, 3.);
+        a = a.x < b.x?a: b;
+        b = vec2(sz, 4.);
+        a = a.x < b.x?a: b;
+
+        return a;
+    }
+    vec3 norm(vec3 p) {
+        float h = 1e-3; vec2 k = vec2(-1, 1);
+        return N(
+            k.xyy*map(p+k.xyy*h).x+
+            k.yxy*map(p+k.yxy*h).x+
+            k.yyx*map(p+k.yyx*h).x+
+            k.xxx*map(p+k.xxx*h).x
+        );
+    }
+    float calcAO(vec3 p, vec3 n) {
+        float occ = .0,
+        sca = 1.;
+        for (float i = .0; i < 2.; i++) {
+            float h = .01+.05*i;
+            float d = map(p+h*n).x;
+            occ += (h-d)*sca;
+            sca *= .5;
+            if (occ > .35) break;
+        }
+        return clamp(1.-3.*occ,.0, 1.)*(.5+.5*n.y);
+    }
+    void cam(inout vec3 p) {
+        vec2 m = P > 0?mouse*3.14: vec2(0);
+        float t = T*.1;
+        p.yz *= rot(-cos(t)*.2-m.y*1.5707);
+        p.xz *= rot(t-m.x*3.14);
+    }
+    void main() {
+        vec2 uv = (FC-.5*R)/min(R.x, R.y);
+        vec3 col = vec3(0),
+        p = vec3(0, 0, exp(sin(3.1415926536+T*.05))*1.5-7.),
+        rd = N(vec3(uv, 1.9));
+        cam(p); cam(rd);
+        const float steps = 400., maxd = 12.;
+        float bnz = .0,
+        a = .5;
+        for (float i = .0; i < steps; i++) {
+            vec2 d = map(p);
+            if (abs(d.x) < 1e-3) {
+                if (bnz++>1.) break;
+                vec3 n = norm(p),
+                l = N(vec3(0, 10, 0)),
+                r = reflect(rd, n);
+                float diff = dot(l, n)*.5+.5,
+                occ = calcAO(p, n);
+                col += diff*(1.-a)*occ;
+                
+                if (d.y > 2.) {
+                    vec3 q = p*2.;
+                    if (d.y > 3.) {
+                        q *= 3.+vec3(0,-1.5,0);
+                        q.xz+=vec2(2.2,-2);
+                    }
+                    n = abs(n);
+                    col = max(col, pattern(q.xz)*n.y);
+                    col = max(col, pattern(q.xy)*n.z);
+                    col = max(col, pattern(q.yz)*n.x);
+                    col *= occ;
+                    col += pow(max(.0, r.y), 20.)*(d.y < 4. ? .5: .1);
+                    break;
+                } else if (d.y == 2.) {
+                    col *= S(.45,.45-2./max(R.x, R.y), sin(2.92*dot(p, p))*.5+.5);
+                }
+                col += pow(max(.0, r.y), 20.);
+                a *= .75;
+                rd = r;
+                d.x = 3e-2;
+            }
+
+            if (d.x > maxd) break;
+            p += rd*d.x;
+        }
+        O = vec4(col, 1);
+    }
+    </script>
+    <script  src="js/script.js"></script>
+
+</body>
+</html>
